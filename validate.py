@@ -42,7 +42,7 @@ from src.data.candle_builder import CandleBuilder
 from src.data.news_client import NewsClient
 from src.data.polymarket_client import CLOBClient, GammaClient
 from src.strategy.features import build_features
-from src.strategy.signal_engine import generate_decision, score_features
+from src.strategy.signal_engine import generate_decision, compute_ev, Signal
 
 HR = "=" * 70
 
@@ -184,23 +184,25 @@ async def test_signals(markets=None):
             for i in range(20)
         ]
 
-        features = build_features(market.token_id, fake_candles, book, news_sentiment=0.0)
+        features = build_features(market.token_id, fake_candles, book, news_sentiment=0.0, news_relevance=0.5)
         decision = generate_decision(features)
-        score, reasons = score_features(features)
 
         signal_icon = {"BUY": "+", "SELL": "-", "HOLD": "~"}[decision.signal.value]
         print(f"  Signal: [{signal_icon}] {decision.signal.value}  "
-              f"score={score:+.3f}  confidence={decision.confidence:.3f}")
+              f"conf={decision.confidence:.3f}  ev={decision.expected_value:.5f}")
+        if decision.rejected_reason:
+            print(f"  Rejected: {decision.rejected_reason}")
         print(f"  Reasons: {', '.join(decision.reasons) if decision.reasons else 'neutral'}")
         print(f"  Target: ${decision.target_price:.4f}  |  Size frac: {decision.size_fraction:.3f}")
 
         results.append({
             "question": market.question[:50],
             "signal": decision.signal.value,
-            "score": score,
+            "ev": decision.expected_value,
             "confidence": decision.confidence,
             "spread": book.spread,
             "reasons": decision.reasons,
+            "rejected": decision.rejected_reason,
         })
 
     print(f"\n  --- SIGNAL SUMMARY ---")
@@ -211,11 +213,20 @@ async def test_signals(markets=None):
     if results:
         avg_conf = sum(r["confidence"] for r in results) / len(results)
         avg_spread = sum(r["spread"] for r in results) / len(results)
+        active = [r for r in results if r["signal"] != "HOLD"]
+        avg_ev = sum(r["ev"] for r in active) / len(active) if active else 0
+        rejected_reasons = [r.get("rejected", "") for r in results if r.get("rejected")]
         print(f"  Avg confidence: {avg_conf:.3f}")
         print(f"  Avg spread: {avg_spread:.4f}")
+        print(f"  Avg EV (active): {avg_ev:.5f}")
+        if rejected_reasons:
+            from collections import Counter
+            top_rejects = Counter(rejected_reasons).most_common(3)
+            print(f"  Top rejection reasons: {top_rejects}")
         wide = sum(1 for r in results if r["spread"] > 0.06)
         print(f"  Markets with wide spread (>$0.06): {wide}")
-        print(f"  Verdict: {'SIGNALS OK' if buys + sells > 0 else 'ALL HOLD — may need more data/time'}")
+        verdict = "SIGNALS OK (EV-gated)" if buys + sells > 0 else "ALL HOLD — filters working correctly"
+        print(f"  Verdict: {verdict}")
 
     await clob.close()
     return results

@@ -39,6 +39,7 @@ async def health():
         "status": "ok",
         "dry_run": get_settings().dry_run,
         "metrics": bot.metrics.to_dict() if bot else {},
+        "feedback": bot.feedback.to_dict() if bot else {},
     }
 
 
@@ -46,7 +47,21 @@ async def health():
 async def metrics():
     if not bot:
         return {"error": "bot not initialized"}
-    return bot.metrics.to_dict()
+    return {**bot.metrics.to_dict(), **bot.feedback.to_dict()}
+
+
+@app.get("/performance")
+async def performance():
+    if not bot:
+        return {"error": "bot not initialized"}
+    fb = bot.feedback
+    return {
+        "mode": fb.mode.value,
+        "overall_win_rate": fb.overall_win_rate,
+        "rolling": fb.window.to_dict(),
+        "thresholds": __import__("src.strategy.signal_engine", fromlist=["THRESHOLDS"]).THRESHOLDS.to_dict(),
+        "latency_avg_ms": bot.executor.avg_latency_ms,
+    }
 
 
 @app.get("/positions")
@@ -58,6 +73,7 @@ async def positions():
             "side": p.side,
             "size": p.size,
             "avg_entry": p.avg_entry,
+            "age_seconds": round(p.age_seconds()),
             "unrealized_pnl": p.unrealized_pnl,
         }
         for tid, p in bot.risk.state.positions.items()
